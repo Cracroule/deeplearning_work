@@ -1,10 +1,10 @@
-import math
+#import math
 import numpy as np
-import h5py
+#import h5py
 import matplotlib.pyplot as plt
-import scipy
+#import scipy
 from PIL import Image
-from scipy import ndimage
+#from scipy import ndimage
 import tensorflow as tf
 from tensorflow.python.framework import ops
 from cnn_utils import load_dataset, convert_to_one_hot, random_mini_batches
@@ -58,7 +58,7 @@ def main():
     #     a = sess.run(cost, {X: np.random.randn(4, 64, 64, 3), Y: np.random.randn(4, 6)})
     #     print("cost = " + str(a))
 
-    _, _, parameters = model(X_train, Y_train, X_test, Y_test, learning_rate=0.002, num_epochs=150)
+    _, _, parameters = model(X_train, Y_train, X_test, Y_test, learning_rate=0.0015, num_epochs=150)
 
 
 # GRADED FUNCTION: create_placeholders
