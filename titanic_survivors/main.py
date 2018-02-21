@@ -1,15 +1,9 @@
-# Load in our libraries
 import pandas as pd
 import numpy as np
 import re
 import sklearn
-#import xgboost as xgb
 import seaborn as sns
 import matplotlib.pyplot as plt
-
-import plotly.offline as py
-import plotly.graph_objs as go
-import plotly.tools as tls
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -18,7 +12,8 @@ warnings.filterwarnings('ignore')
 from sklearn.ensemble import (RandomForestClassifier, AdaBoostClassifier,
                               GradientBoostingClassifier, ExtraTreesClassifier)
 from sklearn.svm import SVC
-from sklearn.cross_validation import KFold
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import StratifiedShuffleSplit
 
 DISPLAY = False
 
@@ -31,8 +26,6 @@ def main():
     # Store our passenger ID for easy access
     PassengerId = test['PassengerId']
 
-    print(train.head(3))
-
     np.random.seed(1)
 
     full_data = [train, test]
@@ -40,9 +33,9 @@ def main():
     predictions = classifier_stacking(x_train, y_train, x_test, feature_names)
 
     # on the below: we reduce the input set, in order to try to validate our results
-    reduced_x_train, reduced_y_train, cross_val_x, cross_val_y = split_train_set(x_train, y_train, 0.9)
-    cross_val_predictions = classifier_stacking(reduced_x_train, reduced_y_train, cross_val_x, feature_names)
-    print("ACCURACY ON CROSS VAL :", (cross_val_predictions == cross_val_y).mean())
+    reduced_x_train, reduced_y_train, cross_val_x, cross_val_y = split_train_set(x_train, y_train, 0.8)
+    cross_val_pred = classifier_stacking(reduced_x_train, reduced_y_train, cross_val_x, feature_names)
+    print("ACCURACY ON CROSS VAL :", (cross_val_pred == cross_val_y).astype(int).mean())
 
     # Generate Submission File
     StackingSubmission = pd.DataFrame({'PassengerId': PassengerId, 'Survived': predictions})
@@ -191,15 +184,11 @@ def feature_engineering(full_data):
 
 
 def classifier_stacking(x_train, y_train, x_test, cols):
-    # Some useful parameters which will come in handy later on
-    ntrain = x_train.shape[0]
-    ntest = x_test.shape[0]
     SEED = 0  # for reproducibility
-    NFOLDS = 5  # set folds for out-of-fold prediction
-    kf = KFold(ntrain, n_folds=NFOLDS, random_state=SEED)
 
     # Class to extend the Sklearn classifier
     class SklearnHelper(object):
+
         def __init__(self, clf, seed=0, params=None):
             params['random_state'] = seed
             self.clf = clf(**params)
@@ -214,29 +203,11 @@ def classifier_stacking(x_train, y_train, x_test, cols):
             return self.clf.fit(x, y)
 
         def feature_importances(self, x, y):
-            return self.clf.fit(x, y).feature_importances_
-
-            # Class to extend XGboost classifer
-
-    def get_oof(clf, x_train, y_train, x_test):
-        oof_train = np.zeros((ntrain,))
-        oof_test = np.zeros((ntest,))
-        oof_test_skf = np.empty((NFOLDS, ntest))
-
-        for i, (train_index, test_index) in enumerate(kf):
-            x_tr = x_train[train_index]
-            y_tr = y_train[train_index]
-            x_te = x_train[test_index]
-
-            clf.train(x_tr, y_tr)
-
-            oof_train[test_index] = clf.predict(x_te)
-            oof_test_skf[i, :] = clf.predict(x_test)
-
-        oof_test[:] = oof_test_skf.mean(axis=0)
-        # returns the predictions made on artificially created test samples (from train set)
-        # and actual test predictions (as mean of 5 obtained params set)
-        return oof_train.reshape(-1, 1), oof_test.reshape(-1, 1)
+            res_fit = self.clf.fit(x, y)
+            try:
+                return res_fit.feature_importances_
+            except AttributeError:
+                return None
 
     # Put in our parameters for said classifiers
     # Random Forest parameters
@@ -289,54 +260,111 @@ def classifier_stacking(x_train, y_train, x_test, cols):
     gb = SklearnHelper(clf=GradientBoostingClassifier, seed=SEED, params=gb_params)
     svc = SklearnHelper(clf=SVC, seed=SEED, params=svc_params)
 
-    # Create our OOF train and test predictions. These base results will be used as new features
-    et_oof_train, et_oof_test = get_oof(et, x_train, y_train, x_test)  # Extra Trees
-    rf_oof_train, rf_oof_test = get_oof(rf, x_train, y_train, x_test)  # Random Forest
-    ada_oof_train, ada_oof_test = get_oof(ada, x_train, y_train, x_test)  # AdaBoost
-    gb_oof_train, gb_oof_test = get_oof(gb, x_train, y_train, x_test)  # Gradient Boost
-    svc_oof_train, svc_oof_test = get_oof(svc, x_train, y_train, x_test)  # Support Vector Classifier
+    # One the below; We train each model with Kfold method
+    # ##############################################
+    classifiers = [rf, et, ada, gb, svc]
 
+    n_splits = 5
+    sss = StratifiedShuffleSplit(n_splits=n_splits, test_size=1./n_splits, random_state=0)
+    X = x_train
+    y = y_train
+
+    acc_dict = {}
+    my_train_predictions = dict()
+    my_test_predictions = dict()
+    i = 0
+    for train_index, cross_val_index in sss.split(X, y):  # k_fold core computations
+        X_train, X_cross_val = X[train_index], X[cross_val_index]
+        Y_train, Y_cross_val = y[train_index], y[cross_val_index]
+
+        for clf in classifiers:
+            name = clf.clf.__class__.__name__
+            clf.fit(X_train, Y_train)
+            if name not in my_train_predictions.keys():
+                my_train_predictions[name] = np.zeros((x_train.shape[0], ))
+            my_train_predictions[name][cross_val_index] = clf.predict(X_cross_val)
+            if name not in my_test_predictions.keys():
+                my_test_predictions[name] = np.zeros((x_test.shape[0], n_splits))
+            my_test_predictions[name][:, i] = clf.predict(x_test)
+
+            acc = accuracy_score(Y_cross_val, my_train_predictions[name][cross_val_index])
+            if name in acc_dict:
+                acc_dict[name] += acc
+            else:
+                acc_dict[name] = acc
+        i += 1
     print("Training is complete")
-    rf_feature = rf.feature_importances(x_train, y_train)
-    et_feature = et.feature_importances(x_train, y_train)
-    ada_feature = ada.feature_importances(x_train, y_train)
-    gb_feature = gb.feature_importances(x_train, y_train)
 
-    # Create a dataframe with features
-    feature_dataframe = pd.DataFrame({'features': cols,
-                                      'Random Forest feature importances': rf_feature,
-                                      'Extra Trees  feature importances': et_feature,
-                                      'AdaBoost feature importances': ada_feature,
-                                      'Gradient Boost feature importances': gb_feature
-                                      })
+    # we aggregate results into helpful dictionaries
+    log_cols = ["Classifier", "Accuracy"]
+    logs = pd.DataFrame(columns=log_cols)
+    avg_test_prediction, majority_test_prediction = dict(), dict()
+    print("--- accuracy (obtained by kfold method on train set) ---")
+    flatten_train_predictions = dict()
+    for clf in classifiers:
+        name = clf.clf.__class__.__name__
+        avg_test_prediction[name] = my_test_predictions[name].mean(axis=1, keepdims=True)
+        majority_test_prediction[name] = line_by_line_most_frequent(my_test_predictions[name]).reshape((-1, 1))
+        acc_dict[name] /= n_splits
+        log_entry = pd.DataFrame([[name, acc_dict[name]]], columns=log_cols)
+        logs = logs.append(log_entry)
+        # we save flatten version to display heatmap between models a bit later
+        flatten_train_predictions[name] = my_train_predictions[name]
+        my_train_predictions[name] = my_train_predictions[name].reshape((-1, 1))
+        print(name, round(acc_dict[name], 4))
 
-    # Create the new column containing the average of values
+    # two following lines: size of display
+    fig, ax = plt.subplots()
+    fig.set_size_inches(12, 4)
+    plt.xlabel('Accuracy')
+    plt.title('Classifier Accuracy')
+    sns.set_color_codes("muted")
+    sns.barplot(x='Accuracy', y='Classifier', data=logs, color="b")
+    if DISPLAY: plt.show()
 
-    feature_dataframe['mean'] = feature_dataframe.mean(axis=1)  # axis = 1 computes the mean row-wise
-    print(feature_dataframe.head(10))
-
-    base_predictions_train = pd.DataFrame({'RandomForest': rf_oof_train.ravel(),
-                                           'ExtraTrees': et_oof_train.ravel(),
-                                           'AdaBoost': ada_oof_train.ravel(),
-                                           'GradientBoost': gb_oof_train.ravel()
-                                           })
-    base_predictions_train.head()
-
+    # below: heatmap of results with different models (better if not too similar results)
+    base_predictions_train = pd.DataFrame(flatten_train_predictions)
+    print(base_predictions_train.head())
     g = sns.heatmap(base_predictions_train.astype(float).corr(), annot=True, fmt=".2f", cmap="coolwarm")
     if DISPLAY: plt.show()
 
-    x_train = np.concatenate((et_oof_train, rf_oof_train, ada_oof_train, gb_oof_train, svc_oof_train), axis=1)
-    x_test = np.concatenate((et_oof_test, rf_oof_test, ada_oof_test, gb_oof_test, svc_oof_test), axis=1)
+    # below: work on importance of features according to those models
+    feature_importance = {'features': cols}
+    for clf in classifiers:
+        clf_feature_importance = clf.feature_importances(x_train, y_train)
+        if clf_feature_importance is not None:  # does not work with SVC for example
+            feature_importance[clf.clf.__class__.__name__] = clf_feature_importance
+    feature_dataframe = pd.DataFrame(feature_importance)  # Create a dataframe with features
+    feature_dataframe['mean'] = feature_dataframe.mean(axis=1)  # axis = 1 computes the mean row-wise
+    print(feature_dataframe.head(10))
 
-    rf2 = SklearnHelper(clf=RandomForestClassifier, seed=SEED, params=rf_params)
-    rf2.train(x_train, y_train)
-    res = rf2.predict(x_test)
+    # below: level 2 data generation and predictions
+    x_train_level_2 = np.concatenate(tuple([my_train_predictions[c.clf.__class__.__name__] for c in classifiers]),
+                                     axis=1)
+    x_test_level_2 = np.concatenate(tuple([avg_test_prediction[c.clf.__class__.__name__] for c in classifiers]), axis=1)
+    x_test_level_2_bis = np.concatenate(
+        tuple([majority_test_prediction[c.clf.__class__.__name__] for c in classifiers]),
+        axis=1)
 
-    # The below works as a vote, the majority choose the final class
-    # results are almost the same
-    # res2 = line_by_line_most_frequent(x_test)
+    # res = list()
+    # rf = SklearnHelper(clf=RandomForestClassifier, seed=SEED, params=rf_params)
+    # et = SklearnHelper(clf=ExtraTreesClassifier, seed=SEED, params=et_params)
+    # ada = SklearnHelper(clf=AdaBoostClassifier, seed=SEED, params=ada_params)
+    # gb = SklearnHelper(clf=GradientBoostingClassifier, seed=SEED, params=gb_params)
+    # svc = SklearnHelper(clf=SVC, seed=SEED, params=svc_params)
+    # meta_classifiers = [rf, et, ada, gb, svc]
+    # for clf in meta_classifiers:
+    #     print(clf.clf.__class__.__name__)
+    #     clf.train(x_train_level_2, y_train)
+    #     res.append(clf.predict(x_test_level_2))
+    #     res.append(clf.predict(x_test_level_2_bis))
+    #return res
 
-    return res
+    rf_level_2 = SklearnHelper(clf=RandomForestClassifier, seed=SEED, params=rf_params)
+    rf_level_2.train(x_train_level_2, y_train)
+    level_2_prediction = rf_level_2.predict(x_test_level_2)
+
+    return level_2_prediction
 
 
 def line_by_line_most_frequent(input_matrix):
