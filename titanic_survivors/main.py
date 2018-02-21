@@ -333,7 +333,7 @@ def classifier_stacking(x_train, y_train, x_test, cols):
     res = rf2.predict(x_test)
 
     # The below works as a vote, the majority choose the final class
-    # results are the same on test i made
+    # results are almost the same
     # res2 = line_by_line_most_frequent(x_test)
 
     return res
