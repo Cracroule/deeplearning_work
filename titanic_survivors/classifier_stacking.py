@@ -11,9 +11,11 @@ warnings.filterwarnings('ignore')
 # Going to use these 5 base models for the stacking
 from sklearn.ensemble import (RandomForestClassifier, AdaBoostClassifier,
                               GradientBoostingClassifier, ExtraTreesClassifier)
+from sklearn.neighbors import KNeighborsClassifier #KNN
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import StratifiedShuffleSplit
+
 
 DISPLAY = False
 
@@ -26,7 +28,7 @@ def main():
     # Store our passenger ID for easy access
     PassengerId = test['PassengerId']
 
-    np.random.seed(1)
+    np.random.seed(2)
 
     full_data = [train, test]
     x_train, y_train, x_test, feature_names = feature_engineering(full_data)
@@ -189,8 +191,9 @@ def classifier_stacking(x_train, y_train, x_test, cols):
     # Class to extend the Sklearn classifier
     class SklearnHelper(object):
 
-        def __init__(self, clf, seed=0, params=None):
-            params['random_state'] = seed
+        def __init__(self, clf, seed=None, params=None):
+            if seed:
+                params['random_state'] = seed
             self.clf = clf(**params)
 
         def train(self, x_train, y_train):
@@ -253,16 +256,28 @@ def classifier_stacking(x_train, y_train, x_test, cols):
         'C': 0.025
     }
 
+    # KNN params
+    knn_params = {
+        'algorithm': 'auto',
+        'leaf_size': 26,
+        'metric': 'minkowski',
+        'metric_params': None,
+        'n_jobs': -1,
+        'n_neighbors': 6,
+        'p': 2,
+        'weights': 'uniform'}
+
     # Create 5 objects that represent our 4 models
     rf = SklearnHelper(clf=RandomForestClassifier, seed=SEED, params=rf_params)
     et = SklearnHelper(clf=ExtraTreesClassifier, seed=SEED, params=et_params)
     ada = SklearnHelper(clf=AdaBoostClassifier, seed=SEED, params=ada_params)
     gb = SklearnHelper(clf=GradientBoostingClassifier, seed=SEED, params=gb_params)
     svc = SklearnHelper(clf=SVC, seed=SEED, params=svc_params)
+    knn = SklearnHelper(clf=KNeighborsClassifier, params=knn_params)
 
     # One the below; We train each model with Kfold method
     # ##############################################
-    classifiers = [rf, et, ada, gb, svc]
+    classifiers = [rf, et, ada, gb, svc, knn]
 
     n_splits = 5
     sss = StratifiedShuffleSplit(n_splits=n_splits, test_size=1./n_splits, random_state=0)

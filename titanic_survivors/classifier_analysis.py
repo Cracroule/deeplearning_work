@@ -19,8 +19,8 @@ DISPLAY = True
 
 
 def main():
-    train = pd.read_csv('../input/train.csv', header=0, dtype={'Age': np.float64})
-    test = pd.read_csv('../input/test.csv', header=0, dtype={'Age': np.float64})
+    train = pd.read_csv('./input/train.csv', header=0, dtype={'Age': np.float64})
+    test = pd.read_csv('./input/test.csv', header=0, dtype={'Age': np.float64})
 
     # Store our passenger ID for easy access
     PassengerId = test['PassengerId']
